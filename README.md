@@ -89,10 +89,10 @@ graph TD
     %% Hybrid Retrieval
     Router[Query & Routing Weights] --> HR[Hybrid Retriever]
     
-    HR --> |Hard Facts| SQL[(SQL / PostgreSQL)\nLab Values, Meds]
-    HR --> |Narrative| Vec[(FAISS / Vector DB)\nClinical Notes, Papers]
-    HR --> |Visual| Multimodal[(Multimodal DB)\nX-rays, MRIs]
-    HR --> |Similar Cases| Graph[(Knowledge Graph)]
+    HR --> |Hard Facts| SQL[("SQL / PostgreSQL<br>Lab Values, Meds")]
+    HR --> |Narrative| Vec[("FAISS / Vector DB<br>Clinical Notes, Papers")]
+    HR --> |Visual| Multimodal[("Multimodal DB<br>X-rays, MRIs")]
+    HR --> |Similar Cases| Graph[("Knowledge Graph")]
 
     SQL --> Fusion[Context Fusion Engine]
     Vec --> Fusion
@@ -128,6 +128,17 @@ If you have issues building `spacy` on macOS, consider using `conda` or installi
 ```bash
 pip install -r requirements.txt
 python -m spacy download en_core_sci_md
+```
+
+### Note on Apple Silicon (M1/M2/M3) vs Windows/Linux
+If you are running this natively on an **Apple Silicon Mac**, you may encounter a `[mutex.cc : 452] RAW: Lock blocking` error or a `zsh: segmentation fault` when running the pipeline. 
+This is a known hardware/library threading conflict specifically between macOS OpenMP (`faiss-cpu`) and `torch`. 
+**Windows and Ubuntu/Linux do NOT have this issue** and will run natively out of the box because the PyTorch and FAISS C++ ABI matches the underlying OS thread handling correctly.
+
+If you are on a Mac, we already added a workaround in `app.py` and `run_test.py` (`os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'`) to silence the fatal lock. If you still encounter crashes, you can manually export it:
+```bash
+export KMP_DUPLICATE_LIB_OK=TRUE
+python run_test.py
 ```
 
 ### Database Configuration
