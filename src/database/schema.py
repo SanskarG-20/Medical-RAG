@@ -8,10 +8,11 @@ def init_db():
     db_url = os.getenv("DATABASE_URL")
     if not db_url:
         print("DATABASE_URL not found. Make sure .env is loaded correctly.")
-        db_url = 'postgresql://neondb_owner:npg_4NVun9LMyiAE@ep-aged-firefly-a14820vk-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require'
+        db_url = 'sqlite:///medragx.db'
         
     # Replace handler to psycopg (v3) for modern async/sync support
-    db_url = db_url.replace("postgresql://", "postgresql+psycopg://")
+    if db_url.startswith("postgresql://"):
+        db_url = db_url.replace("postgresql://", "postgresql+psycopg://")
     engine = create_engine(db_url)
 
     with engine.connect() as conn:
