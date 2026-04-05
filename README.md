@@ -18,7 +18,7 @@ graph TD
 
     subgraph Agentic Parsing Pipeline
         Ingestion --> O[Orchestrator Agent]
-        O --> L[Layout Agent]
+        O --> L[Layout Agent<br>PyMuPDF + Tesseract OCR]
         O --> T[Table Agent]
         O --> I[Image Agent]
         O --> E[Entity Agent]
@@ -26,7 +26,7 @@ graph TD
     end
 
     subgraph Multimodal RAG & Router
-        V -- Validated Data --> DB[(Vector DB / Neon Postgres)]
+        V -- Validated Data --> DB[(ChromaDB / Neon Postgres)]
         Q[User Query] --> R[Dual-Signal Query Router]
         R -->|Routing Weights| Retrieval
         DB --> Retrieval
@@ -42,15 +42,18 @@ graph TD
 ### 2. Agentic Parsing System
 Documents (PDFs, EHRs) are handled by a multi-agent parser acting as a state machine. It correctly extracts structure, tabular data, images, and medical entities, with a hard validation mechanism to prevent hallucinations.
 
+The **Layout Agent** uses a two-pass extraction strategy:
+1. **Native text extraction** via PyMuPDF for digitally-born PDFs.
+2. **OCR fallback** via Tesseract for scanned/image-based medical documents (renders each page at 300 DPI and runs OCR).
+
 ```mermaid
 graph LR
-    %% Parsing Pipeline
     PDF[Raw Medical PDF] --> Parser[Parser Orchestrator]
     
-    Parser --> Layout[Layout Agent\nDetectron2]
-    Parser --> Table[Table Agent\nCamelot/LLM]
-    Parser --> Image[Image Agent\nCLIP]
-    Parser --> Entity[Entity Agent\nSciSpacy]
+    Parser --> Layout[Layout Agent<br>PyMuPDF + Tesseract OCR]
+    Parser --> Table[Table Agent<br>Camelot/LLM]
+    Parser --> Image[Image Agent<br>CLIP]
+    Parser --> Entity[Entity Agent<br>SciSpacy]
     
     Layout --> Context[Context Aggregation]
     Table --> Context
@@ -58,7 +61,7 @@ graph LR
     Entity --> Context
     
     Context --> Validator{Validator Agent}
-    Validator -- Pass --> Structured[Structured Output\nJSON/Dict]
+    Validator -- Pass --> Structured[Structured Output<br>JSON/Dict]
     Validator -- Fail --> Fallback[Fallback/LLM Parsing]
     Fallback --> Validator
 ```
@@ -84,14 +87,16 @@ sequenceDiagram
 ### 4. Hybrid Retrieval System
 The Context Fusion engine merges deterministic SQL queries (for hard facts like lab values) with vector-based semantic retrieval and dense graph lookups. It ensures critical patient data isn't lost in probabilistic vector spaces.
 
+Vector storage uses **ChromaDB** with persistent local storage, replacing FAISS for improved cross-platform compatibility (especially macOS Apple Silicon).
+
 ```mermaid
 graph TD
     %% Hybrid Retrieval
     Router[Query & Routing Weights] --> HR[Hybrid Retriever]
     
     HR --> |Hard Facts| SQL[("SQL / PostgreSQL<br>Lab Values, Meds")]
-    HR --> |Narrative| Vec[("FAISS / Vector DB<br>Clinical Notes, Papers")]
-    HR --> |Visual| Multimodal[("Multimodal DB<br>X-rays, MRIs")]
+    HR --> |Narrative| Vec[("ChromaDB<br>Clinical Notes, Papers")]
+    HR --> |Visual| Multimodal[("ChromaDB Multimodal<br>X-rays, MRIs")]
     HR --> |Similar Cases| Graph[("Knowledge Graph")]
 
     SQL --> Fusion[Context Fusion Engine]
@@ -121,24 +126,38 @@ graph TD
 ## Setup & Execution
 
 ### Prerequisites
-Make sure your environment is configured for Python 3.10+ and you have necessary C++ build tools for `spacy` and `psycopg`.
+Make sure your environment is configured for Python 3.10+ and you have Tesseract OCR installed for scanned PDF support.
 
-If you have issues building `spacy` on macOS, consider using `conda` or installing prebuilt binaries.
+**macOS:**
+```bash
+brew install tesseract
+```
 
+**Ubuntu/Linux:**
+```bash
+sudo apt-get install tesseract-ocr
+```
+
+**Windows:**
+Download the installer from [UB Mannheim Tesseract](https://github.com/UB-Mannheim/tesseract/wiki).
+
+### Install Dependencies
 ```bash
 pip install -r requirements.txt
-python -m spacy download en_core_sci_md
+```
+
+The SciSpacy biomedical model is installed automatically via the requirements. If you need to install it manually:
+```bash
+pip install https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.3/en_core_sci_md-0.5.3.tar.gz
 ```
 
 ### Note on Apple Silicon (M1/M2/M3) vs Windows/Linux
-If you are running this natively on an **Apple Silicon Mac**, you may encounter a `[mutex.cc : 452] RAW: Lock blocking` error or a `zsh: segmentation fault` when running the pipeline. 
-This is a known hardware/library threading conflict specifically between macOS OpenMP (`faiss-cpu`) and `torch`. 
-**Windows and Ubuntu/Linux do NOT have this issue** and will run natively out of the box because the PyTorch and FAISS C++ ABI matches the underlying OS thread handling correctly.
 
-If you are on a Mac, we already added a workaround in `app.py` and `run_test.py` (`os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'`) to silence the fatal lock. If you still encounter crashes, you can manually export it:
+The vector store has been migrated from **FAISS** to **ChromaDB** to eliminate the known OpenMP / PyTorch threading lock conflicts (`[mutex.cc : 452] RAW: Lock blocking` / `zsh: segmentation fault`) on macOS Apple Silicon. ChromaDB uses a persistent local storage model that is fully cross-platform.
+
+If you still encounter thread-related warnings, the `KMP_DUPLICATE_LIB_OK=True` workaround is pre-set in `app.py` and `run_test.py`. You can also manually export it:
 ```bash
 export KMP_DUPLICATE_LIB_OK=TRUE
-python run_test.py
 ```
 
 ### Database Configuration
@@ -146,7 +165,15 @@ We use Neon PostgreSQL for scalable deployment. Be sure to configure your enviro
 ```bash
 export DATABASE_URL="postgresql://user:password@neondb.aws.neon.tech/dbname"
 ```
-*(If unset, it will fail back gracefully to local SQLite where supported)*
+*(If unset, it will fall back gracefully to local SQLite where supported)*
+
+### API Keys
+Configure the following in your `.env` file (see `.env.example`):
+```
+GROQ_API_KEY=your_groq_key_here       # Required for LLM reasoning (Llama 3 70B)
+PINECONE_API_KEY=your_pinecone_key     # Optional
+NCBI_API_KEY=your_ncbi_key            # Optional (PubMed retrieval)
+```
 
 ### Running the Application
 
@@ -156,8 +183,28 @@ python app.py
 ```
 This runs the FastAPI server with the orchestrated state machine on port 8000.
 
-2. **Run Tests:**
+2. **Run the End-to-End Test:**
+```bash
+python run_my_test.py
+```
+Runs the full pipeline against a sample medical PDF: parse → chunk → embed into ChromaDB → retrieve → reason via Groq LLM.
+
+3. **Run Module Tests:**
 ```bash
 python run_test.py
 ```
 Validates the module loading, routing, retrieval, and output generation of the master pipeline.
+
+## Key Technology Choices
+
+| Component | Technology | Why |
+|---|---|---|
+| PDF Text Extraction | PyMuPDF + Tesseract OCR | Handles both digital and scanned PDFs. Two-pass strategy: native text first, OCR fallback for image-based pages |
+| Biomedical NER | SciSpacy (`en_core_sci_md`) | UMLS-grounded entity extraction for diseases, tests, chemicals |
+| Vector Store | ChromaDB (persistent) | Cross-platform, no OpenMP conflicts, auto-persistent local storage |
+| Multimodal Embeddings | CLIP (`openai/clip-vit-base-patch32`) | Joint text-image latent space for X-ray/MRI retrieval |
+| Text Embeddings | SentenceTransformers (`all-MiniLM-L6-v2`) | Fast, normalized embeddings for clinical text similarity |
+| Reranking | Cross-Encoder (`ms-marco-MiniLM-L-6-v2`) | Filters low-relevance chunks to prevent hallucination |
+| LLM Reasoning | Groq (Llama 3 70B) | Ultra-fast inference with strict JSON output + semantic verification |
+| Database | Neon PostgreSQL / SQLite fallback | Scalable cloud DB with local development support |
+| Query Routing | Dual-Signal (SciSpacy + MiniLM) | Entity grounding + semantic intent classification |
