@@ -1,3 +1,6 @@
+import os
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
+
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks
 import uvicorn
 import shutil

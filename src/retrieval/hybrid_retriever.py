@@ -26,11 +26,9 @@ class HybridRetriever:
         
         # 1. Connecting the True Text Pipeline
         self.text_pipeline = EmbeddingPipeline(db_path=db_path)
-        self.text_pipeline.load_index()  # Pulls the generated .index and .pkl
         
         # 2. Connecting the True Image Pipeline
         self.image_pipeline = MultimodalIndex()
-        self.image_pipeline.load_index()
         
         # 3. Knowledge Graph
         self.graph = nx.Graph()
@@ -119,7 +117,6 @@ class CaseRetriever:
     """Separate engine dedicated to historical case matching"""
     def __init__(self, db_path="medragx.db"):
         self.text_pipeline = EmbeddingPipeline(db_path=db_path)
-        self.text_pipeline.load_index()
 
     def run(self, state: dict):
         query_text = state.get("query", "patient history")

@@ -1,4 +1,5 @@
 import sys, os
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
 sys.path.append(os.getcwd())
 
 print("Loading router...")

@@ -1,13 +1,12 @@
 import sqlite3
 import numpy as np
-import faiss
-import pickle
 import os
+import chromadb
 from sqlalchemy import create_engine, text
 from sentence_transformers import SentenceTransformer
 
 class EmbeddingPipeline:
-    def __init__(self, db_path="medragx.db", store_path="medragx_text_store.pkl", index_path="medragx_text.index"):
+    def __init__(self, db_path="medragx.db", store_path="./medrag_chroma", index_path="medragx_text"):
         self.db_path = db_path
         self.store_path = store_path
         self.index_path = index_path
@@ -18,8 +17,8 @@ class EmbeddingPipeline:
             db_url = db_url.replace("postgresql://", "postgresql+psycopg://")
         self.engine = create_engine(db_url)
         
-        self.index = None
-        self.text_store = []
+        self.chroma_client = chromadb.PersistentClient(path=self.store_path)
+        self.collection = self.chroma_client.get_or_create_collection(name=self.index_path)
         
         # Using a fast powerful local embeddings model instead of OpenAI for offline medical compliance
         self.model = SentenceTransformer('all-MiniLM-L6-v2') 
@@ -39,7 +38,7 @@ class EmbeddingPipeline:
         return [" ".join(words[i:i+chunk_size]) for i in range(0, len(words), chunk_size)]
 
     def embed_text(self, text):
-        return self.model.encode(text, normalize_embeddings=True)
+        return self.model.encode(text, normalize_embeddings=True).tolist()
 
     def build_index(self):
         data = self.fetch_data()
@@ -48,58 +47,46 @@ class EmbeddingPipeline:
             print("[-] No data found in SQLite DB to embed.")
             return
 
-        vectors = []
+        documents = []
+        embeddings = []
+        ids = []
+        
+        chunk_idx = 0
         for doc in data:
             chunks = self.chunk_text(doc)
 
             for chunk in chunks:
                 vec = self.embed_text(chunk)
-                vectors.append(vec)
-                self.text_store.append(chunk)
+                
+                documents.append(chunk)
+                embeddings.append(vec)
+                ids.append(f"doc_{chunk_idx}")
+                chunk_idx += 1
 
-        if not vectors:
+        if not documents:
             print("[-] No chunks generated.")
             return
 
-        vectors = np.vstack(vectors).astype(np.float32)
+        self.collection.add(
+            embeddings=embeddings,
+            documents=documents,
+            ids=ids
+        )
 
-        dim = vectors.shape[1]
-        # Inner product perfectly fits normalized embeddings
-        self.index = faiss.IndexFlatIP(dim)
-        self.index.add(vectors)
-
-        print(f"[+] Indexed {len(vectors)} chunks into FAISS text index.")
-        self.save_index()
-
-    def save_index(self):
-        faiss.write_index(self.index, self.index_path)
-        with open(self.store_path, "wb") as f:
-            pickle.dump(self.text_store, f)
-        print(f"[+] Successfully saved FAISS index and Text Store.")
-
-    def load_index(self):
-        if os.path.exists(self.index_path) and os.path.exists(self.store_path):
-            self.index = faiss.read_index(self.index_path)
-            with open(self.store_path, "rb") as f:
-                self.text_store = pickle.load(f)
-            print("[+] Loaded FAISS text index and Text Store into memory.")
-        else:
-            print("[-] Index files do not exist.")
+        print(f"[+] Indexed {len(documents)} chunks into ChromaDB text index.")
 
     def search(self, query, k=5):
-        if not self.index:
-            self.load_index()
-            
         q_vec = self.embed_text(query)
-        q_vec = np.array([q_vec], dtype=np.float32)
-
-        distances, indices = self.index.search(q_vec, k)
         
-        if len(indices) == 0 or len(indices[0]) == 0 or indices[0][0] == -1:
-             return []
+        results = self.collection.query(
+            query_embeddings=[q_vec],
+            n_results=k
+        )
+        
+        if not results['documents'] or not results['documents'][0]:
+            return []
 
-        results = [self.text_store[i] for i in indices[0] if i != -1]
-        return results
+        return results['documents'][0]
 
 if __name__ == "__main__":
     pipeline = EmbeddingPipeline()

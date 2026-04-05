@@ -17,24 +17,80 @@ except ImportError:
 
 class LayoutAgent:
     def __init__(self):
-        # Initialize Detectron2 backed LayoutParser for robust structure detection
-        if lp:
-            self.model = lp.Detectron2LayoutModel(
-                config_path='lp://PubLayNet/mask_rcnn_X_101_32x8d_FPN_3x/config',
-                label_map={0: "Text", 1: "Title", 2: "List", 3: "Table", 4: "Figure"},
-                extra_config=["MODEL.ROI_HEADS.SCORE_THRESH_TEST", 0.5]
-            )
-        else:
-            self.model = None
+        # Using PyMuPDF for page rendering + Tesseract for OCR on scanned PDFs
+        try:
+            import fitz
+            self.fitz = fitz
+        except ImportError:
+            self.fitz = None
+        
+        try:
+            import pytesseract
+            from PIL import Image
+            self.pytesseract = pytesseract
+            self.Image = Image
+        except ImportError:
+            self.pytesseract = None
+            self.Image = None
             
     def run(self, pdf_path: str) -> Dict[str, Any]:
-        """Deep learning-based document structure detection."""
-        # Realistic implementation requires converting PDF pages to images
-        # and running self.model.detect(image)
+        """Extract text from PDF using PyMuPDF rendering + Tesseract OCR for scanned documents."""
+        full_text = ""
+        sections = []
+        
+        if self.fitz and self.pytesseract:
+            try:
+                doc = self.fitz.open(pdf_path)
+                for page_num in range(len(doc)):
+                    page = doc[page_num]
+                    
+                    # First try native text extraction
+                    native_text = page.get_text().strip()
+                    # Check if native text has actual content (not just whitespace)
+                    if len(native_text.replace('\n', '').strip()) > 50:
+                        full_text += native_text + "\n"
+                    else:
+                        # Scanned page - render as image and OCR
+                        pix = page.get_pixmap(dpi=300)
+                        img_path = f"/tmp/medrag_page_{page_num}.png"
+                        pix.save(img_path)
+                        img = self.Image.open(img_path)
+                        ocr_text = self.pytesseract.image_to_string(img)
+                        full_text += ocr_text + "\n"
+                        
+                doc.close()
+                
+                # Section detection from extracted text
+                for line in full_text.split("\n"):
+                    stripped = line.strip()
+                    if stripped and len(stripped) < 80 and stripped[0].isupper():
+                        if any(kw in stripped.lower() for kw in ["finding", "diagnos", "impression", "result", "history", "summary", "clinical", "test", "report", "patient", "haemoglobin", "hemoglobin", "hba1c"]):
+                            sections.append(stripped)
+            except Exception as e:
+                print(f"PDF extraction failed: {e}")
+                import traceback
+                traceback.print_exc()
+                full_text = "Extraction failed."
+        elif self.fitz:
+            # Fallback: just use native text extraction
+            try:
+                doc = self.fitz.open(pdf_path)
+                for page_num in range(len(doc)):
+                    page = doc[page_num]
+                    full_text += page.get_text() + "\n"
+                doc.close()
+            except Exception as e:
+                full_text = f"Extraction failed: {e}"
+        else:
+            full_text = "PyMuPDF not available."
+            
+        if not sections:
+            sections = ["Report"]
+            
         layout_data = {
-            "sections": ["Findings", "Diagnosis", "Impression"],
+            "sections": sections,
             "positions": [],
-            "text": "Full extracted document text here to pass down the pipeline."
+            "text": full_text
         }
         return layout_data
 
