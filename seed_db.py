@@ -44,7 +44,7 @@ def seed_database():
     db.insert_graph_edge(source_entity="Fever", relation="symptom_of", target_entity="Pneumonia")
     db.insert_graph_edge(source_entity="Lobar Consolidation", relation="visual_finding_of", target_entity="Pneumonia")
 
-    print("\n✅ Database Seeded Successfully with test data! You can verify Neon is working.")
+    print("\n[+] Database Seeded Successfully with test data! You can verify Neon is working.")
 
 if __name__ == "__main__":
     seed_database()

@@ -48,21 +48,29 @@ class MedRAGPipeline:
         retrieved_contexts = {}
 
         # 2. Execute RAGs based on dynamic activation thresholds
-        # Using 0.0 threshold to force execution for testing if properties exists
-        if routing_vector.get("clinical", 1.0) > 0.4 and patient_id:
+        if (routing_vector.get("clinical", 0.0) >= 0.3 or patient_id) and self.clinical_rag:
             logger.info("Executing Clinical RAG (Deterministic SQL -> Graph -> Vector)")
+            pid = patient_id or "P_DEFAULT"
             if hasattr(self.clinical_rag, "retrieve"):
-                retrieved_contexts["clinical"] = self.clinical_rag.retrieve(patient_id=patient_id, query=query)
+                retrieved_contexts["clinical"] = self.clinical_rag.retrieve(patient_id=pid, query=query)
             else:
-                retrieved_contexts["clinical"] = self.clinical_rag.run(query, patient_id=patient_id)
+                retrieved_contexts["clinical"] = self.clinical_rag.run(query, patient_id=pid)
 
-        if (routing_vector.get("multimodal", 0.0) > 0.6 or image_path) and self.multimodal_rag:
+        if (routing_vector.get("multimodal", 0.0) >= 0.5 or image_path) and self.multimodal_rag:
             logger.info("Executing Multimodal RAG")
             retrieved_contexts["multimodal"] = self.multimodal_rag.run(query, image_path=image_path)
 
-        if routing_vector.get("research", 0.0) > 0.5 and self.research_rag:
+        if routing_vector.get("research", 0.0) >= 0.4 and self.research_rag:
             logger.info("Executing Research RAG")
             retrieved_contexts["research"] = self.research_rag.run(query)
+
+        # Resilient fallback: if no RAG triggered but clinical_rag is available, run clinical RAG
+        if not retrieved_contexts and self.clinical_rag:
+            pid = patient_id or "P_DEFAULT"
+            if hasattr(self.clinical_rag, "retrieve"):
+                retrieved_contexts["clinical"] = self.clinical_rag.retrieve(patient_id=pid, query=query)
+            else:
+                retrieved_contexts["clinical"] = self.clinical_rag.run(query, patient_id=pid)
 
         print("RETRIEVED:", retrieved_contexts)
 

@@ -1,4 +1,9 @@
 import os
+import sys
+
+# Ensure project root is in sys.path
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
+
 from src.database.schema import init_db
 from src.database.db_manager import DatabaseManager
 from src.ingestion.pubmed_scraper import PubMedScraper

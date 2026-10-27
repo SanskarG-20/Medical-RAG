@@ -5,6 +5,14 @@ import chromadb
 from sqlalchemy import create_engine, text
 from sentence_transformers import SentenceTransformer
 
+_SHARED_ENCODER = None
+
+def get_shared_encoder():
+    global _SHARED_ENCODER
+    if _SHARED_ENCODER is None:
+        _SHARED_ENCODER = SentenceTransformer('all-MiniLM-L6-v2')
+    return _SHARED_ENCODER
+
 class EmbeddingPipeline:
     def __init__(self, db_path="medragx.db", store_path="./medrag_chroma", index_path="medragx_text"):
         self.db_path = db_path
@@ -20,8 +28,8 @@ class EmbeddingPipeline:
         self.chroma_client = chromadb.PersistentClient(path=self.store_path)
         self.collection = self.chroma_client.get_or_create_collection(name=self.index_path)
         
-        # Using a fast powerful local embeddings model instead of OpenAI for offline medical compliance
-        self.model = SentenceTransformer('all-MiniLM-L6-v2') 
+        # Using shared fast powerful local embeddings model instead of reloading
+        self.model = get_shared_encoder() 
 
     def fetch_data(self):
         with self.engine.connect() as conn:
@@ -67,7 +75,7 @@ class EmbeddingPipeline:
             print("[-] No chunks generated.")
             return
 
-        self.collection.add(
+        self.collection.upsert(
             embeddings=embeddings,
             documents=documents,
             ids=ids
@@ -76,17 +84,28 @@ class EmbeddingPipeline:
         print(f"[+] Indexed {len(documents)} chunks into ChromaDB text index.")
 
     def search(self, query, k=5):
-        q_vec = self.embed_text(query)
-        
-        results = self.collection.query(
-            query_embeddings=[q_vec],
-            n_results=k
-        )
-        
-        if not results['documents'] or not results['documents'][0]:
-            return []
+        try:
+            count = self.collection.count()
+            if count == 0:
+                self.build_index()
+                count = self.collection.count()
+                if count == 0:
+                    return []
 
-        return results['documents'][0]
+            q_vec = self.embed_text(query)
+            n_results = min(k, count)
+            results = self.collection.query(
+                query_embeddings=[q_vec],
+                n_results=n_results
+            )
+            
+            if not results['documents'] or not results['documents'][0]:
+                return []
+
+            return results['documents'][0]
+        except Exception as e:
+            print(f"[*] EmbeddingPipeline search error ({e}). Returning empty results.")
+            return []
 
 if __name__ == "__main__":
     pipeline = EmbeddingPipeline()

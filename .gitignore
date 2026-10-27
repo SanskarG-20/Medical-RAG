@@ -5,3 +5,5 @@ venv/
 medrag_chroma/
 *.index
 *.pkl
+# Added by code-review-graph
+.code-review-graph/

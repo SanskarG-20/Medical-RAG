@@ -1,15 +1,23 @@
 import os
+import shutil
+import tempfile
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
 
-from fastapi import FastAPI, UploadFile, File, BackgroundTasks
+from fastapi import FastAPI, UploadFile, File
 import uvicorn
-import shutil
 
+from src.database.schema import init_db
 from src.agents.parser_agent import ParserAgent
 from src.retrieval.hybrid_retriever import HybridRetriever, CaseRetriever
 from src.reasoning.clinical_reasoner import ClinicalReasoner
 
 app = FastAPI(title="MedRAG-X API: Advanced Multi-Agent Pipeline", version="2.0.0")
+
+# Ensure database tables exist
+try:
+    init_db()
+except Exception as _e:
+    print(f"[*] DB init notice: {_e}")
 
 # Initialize Pipeline Components
 parser = ParserAgent()
@@ -50,16 +58,36 @@ def orchestrate_pipeline(file_path: str, initial_query: str):
         # State machine gracefully handles failure
         return {"error": str(e), "failed_state": state_machine}
 
+@app.get("/")
+async def root():
+    return {
+        "service": "MedRAG-X API",
+        "status": "online",
+        "endpoints": ["/analyze-report", "/health", "/docs"]
+    }
+
+@app.get("/health")
+async def health():
+    return {"status": "healthy", "service": "MedRAG-X API"}
+
 @app.post("/analyze-report")
 async def analyze_report(file: UploadFile = File(...), query: str = "Analyze this report for immediate diagnoses."):
-    file_path = f"/tmp/{file.filename}"
-    with open(file_path, "wb") as f:
-        shutil.copyfileobj(file.file, f)
-        
-    # Execute the Orchestrated Workflow
-    result = orchestrate_pipeline(file_path, initial_query=query)
+    temp_dir = tempfile.gettempdir()
+    file_path = os.path.join(temp_dir, file.filename or "uploaded_report.pdf")
     
-    return result
+    try:
+        with open(file_path, "wb") as f:
+            shutil.copyfileobj(file.file, f)
+            
+        # Execute the Orchestrated Workflow
+        result = orchestrate_pipeline(file_path, initial_query=query)
+        return result
+    finally:
+        if os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+            except OSError:
+                pass
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
